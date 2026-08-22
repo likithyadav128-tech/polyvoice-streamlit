@@ -1,0 +1,5 @@
+streamlit>=1.29.0
+deep-translator>=1.11.4
+SpeechRecognition>=3.10.1
+requests>=2.31.0
+mutagen>=1.48.0
