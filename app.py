@@ -8,6 +8,12 @@ import streamlit as st
 import speech_recognition as sr
 from deep_translator import GoogleTranslator
 import mutagen
+from gtts import gTTS
+try:
+    from pydub import AudioSegment
+    PYDUB_AVAILABLE = True
+except Exception:
+    PYDUB_AVAILABLE = False
 
 # --- Streamlit Page Configuration ---
 st.set_page_config(
@@ -38,22 +44,12 @@ st.markdown("""
         font-size: 0.95rem;
         margin-bottom: 1.5rem;
     }
-    .stCard {
-        background: rgba(30, 41, 59, 0.5);
-        border: 1px solid rgba(255, 255, 255, 0.1);
+    .player-card {
+        background: rgba(30, 41, 59, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.12);
         border-radius: 12px;
         padding: 1.2rem;
         margin-bottom: 1rem;
-    }
-    .lyric-box {
-        background: #0f172a;
-        border-left: 4px solid #ec4899;
-        padding: 12px 16px;
-        border-radius: 6px;
-        font-family: monospace;
-        font-size: 0.9rem;
-        line-height: 1.6;
-        white-space: pre-wrap;
     }
     .stButton>button {
         border-radius: 10px;
@@ -85,6 +81,10 @@ if 'translations' not in st.session_state:
     st.session_state.translations = {}
 if 'lyrics_data' not in st.session_state:
     st.session_state.lyrics_data = {}
+if 'uploaded_audio_bytes' not in st.session_state:
+    st.session_state.uploaded_audio_bytes = None
+if 'uploaded_audio_name' not in st.session_state:
+    st.session_state.uploaded_audio_name = None
 
 # --- Helper Functions ---
 def format_seconds_to_srt_time(seconds: float) -> str:
@@ -145,7 +145,6 @@ def transcribe_audio_file(file_bytes, filename, lang="en-US"):
             audio_data = r.record(source)
             text = r.recognize_google(audio_data, language=lang)
             
-            # Sentence segments
             sentences = re.split(r'(?<=[.?!,\n])\s+', text)
             sentences = [s.strip() for s in sentences if s.strip()] or [text]
             segments = []
@@ -183,18 +182,77 @@ def search_lyrics_api(track_name, artist_name=""):
     except Exception:
         return None
 
+def generate_translated_audio_with_bgm(translated_text, target_lang_code, original_audio_bytes=None):
+    """
+    Synthesizes translated vocals using gTTS in target language.
+    If original_audio_bytes is provided, mixes original audio (attenuated as BGM) with translated vocals.
+    """
+    # 1. Synthesize translated vocal track
+    tts_lang = "zh-CN" if target_lang_code == "zh-CN" else target_lang_code
+    tts = gTTS(text=translated_text[:2000], lang=tts_lang, slow=False)
+    
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as vocal_file:
+        tts.save(vocal_file.name)
+        vocal_path = vocal_file.name
+        
+    try:
+        if original_audio_bytes and PYDUB_AVAILABLE:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as bgm_file:
+                bgm_file.write(original_audio_bytes)
+                bgm_path = bgm_file.name
+            try:
+                # Load BGM & Vocal tracks
+                bgm_sound = AudioSegment.from_file(bgm_path)
+                vocal_sound = AudioSegment.from_file(vocal_path)
+                
+                # Attenuate BGM volume to -14dB so translated vocal is crystal clear over the tune
+                bgm_attenuated = bgm_sound - 14
+                
+                # Loop or trim BGM to match vocal length
+                if len(bgm_attenuated) < len(vocal_sound):
+                    loops_needed = (len(vocal_sound) // len(bgm_attenuated)) + 1
+                    bgm_attenuated = bgm_attenuated * loops_needed
+                bgm_trimmed = bgm_attenuated[:len(vocal_sound) + 1000]
+                
+                # Overlay translated vocals over BGM music
+                mixed = bgm_trimmed.overlay(vocal_sound, position=0)
+                
+                output_io = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                mixed.export(output_io.name, format="mp3")
+                with open(output_io.name, "rb") as f:
+                    final_bytes = f.read()
+                os.unlink(bgm_path)
+                os.unlink(output_io.name)
+                return final_bytes
+            except Exception:
+                # Fallback to vocal-only if audio format decode fails
+                pass
+
+        with open(vocal_path, "rb") as f:
+            final_bytes = f.read()
+        return final_bytes
+    finally:
+        if os.path.exists(vocal_path):
+            os.unlink(vocal_path)
+
 # --- Sidebar Navigation ---
 st.sidebar.markdown("## 🎙️ **PolyVoice Studio**")
 st.sidebar.markdown("All-in-One Audio, Translation & Lyrics Hub")
 
 navigation = st.sidebar.radio(
     "Select Feature:",
-    ["1. Speech to Text", "2. Multi-Translate", "3. Song Lyrics & Karaoke", "4. Download & Export"],
+    [
+        "1. Speech to Text", 
+        "2. Multi-Translate", 
+        "3. Song Lyrics & Karaoke", 
+        "4. Audio Translation Player (Original vs Translated BGM)",
+        "5. Download & Export"
+    ],
     index=0
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Deployable App**: Pushed to Streamlit Community Cloud for public web access.")
+st.sidebar.info("💡 **Dual Audio Feature**: Listen to original audio AND translated version with matching background music!")
 
 # --- Main App Header ---
 st.markdown('<div class="main-title">PolyVoice - Multilingual Audio & Lyrics Studio</div>', unsafe_allow_html=True)
@@ -219,10 +277,13 @@ if navigation == "1. Speech to Text":
         )
         
         if uploaded_file is not None:
-            st.audio(uploaded_file)
+            file_bytes = uploaded_file.read()
+            st.session_state.uploaded_audio_bytes = file_bytes
+            st.session_state.uploaded_audio_name = uploaded_file.name
+            st.audio(file_bytes)
+            
             if st.button("Transcribe Uploaded File", type="primary", use_container_width=True):
                 with st.spinner("Processing audio with Speech Recognition..."):
-                    file_bytes = uploaded_file.read()
                     text, segs = transcribe_audio_file(file_bytes, uploaded_file.name, recognition_lang)
                     st.session_state.transcript_text = text
                     st.session_state.transcript_segments = segs
@@ -235,10 +296,13 @@ if navigation == "1. Speech to Text":
         mic_audio = st.audio_input("Record your voice live:")
         
         if mic_audio is not None:
+            mic_bytes = mic_audio.read()
+            st.session_state.uploaded_audio_bytes = mic_bytes
+            st.session_state.uploaded_audio_name = "Live_Voice_Recording.wav"
+            
             if st.button("Transcribe Live Recording", type="primary", use_container_width=True):
                 with st.spinner("Transcribing live mic recording..."):
-                    file_bytes = mic_audio.read()
-                    text, segs = transcribe_audio_file(file_bytes, "live_recording.wav", recognition_lang)
+                    text, segs = transcribe_audio_file(mic_bytes, "live_recording.wav", recognition_lang)
                     st.session_state.transcript_text = text
                     st.session_state.transcript_segments = segs
                     st.session_state.transcript_title = "Live_Voice_Recording"
@@ -278,7 +342,7 @@ elif navigation == "2. Multi-Translate":
     )
     
     if st.button("✨ Translate to All Selected Languages", type="primary", use_container_width=True):
-        if not text_to_translate.trim():
+        if not text_to_translate.strip():
             st.error("Please provide text to translate.")
         elif not target_langs:
             st.error("Please select at least one target language.")
@@ -338,10 +402,13 @@ elif navigation == "3. Song Lyrics & Karaoke":
                 st.error("No lyrics found. You can transcribe the song audio in Tab 1!")
 
     st.markdown("---")
-    st.subheader("🎵 Optional: Upload Audio File to Play Along")
+    st.subheader("🎵 Upload Song Audio File (Play Original Tune)")
     song_file = st.file_uploader("Upload Song Audio File (MP3/WAV/M4A)", type=["mp3", "wav", "m4a"])
     if song_file is not None:
-        st.audio(song_file)
+        song_bytes = song_file.read()
+        st.session_state.uploaded_audio_bytes = song_bytes
+        st.session_state.uploaded_audio_name = song_file.name
+        st.audio(song_bytes)
 
     if st.session_state.lyrics_data.get("plain"):
         ld = st.session_state.lyrics_data
@@ -368,9 +435,78 @@ elif navigation == "3. Song Lyrics & Karaoke":
                         st.error(f"Failed to translate lyrics: {e}")
 
 # ==============================================================================
-# TAB 4: DOWNLOAD & EXPORT
+# TAB 4: DUAL AUDIO PLAYER (ORIGINAL VS TRANSLATED VERSION WITH BGM)
 # ==============================================================================
-elif navigation == "4. Download & Export":
+elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
+    st.markdown('<div class="sub-title">Listen to your song/speech in both the ORIGINAL version and the TRANSLATED version with background music (BGM/tunes) intact!</div>', unsafe_allow_html=True)
+    
+    col1, col2 = st.columns([1, 1])
+    
+    with col1:
+        st.markdown("### 🔊 1. Original Version Audio")
+        if st.session_state.uploaded_audio_bytes:
+            st.success(f"Loaded Audio: {st.session_state.uploaded_audio_name or 'Audio Stream'}")
+            st.audio(st.session_state.uploaded_audio_bytes)
+        else:
+            st.info("No original audio file uploaded yet. Upload an audio file in Tab 1 or Tab 3 to play along with BGM!")
+            uploaded_dub_file = st.file_uploader("Upload Song/Speech Audio for BGM:", type=["mp3", "wav", "m4a", "ogg"])
+            if uploaded_dub_file:
+                st.session_state.uploaded_audio_bytes = uploaded_dub_file.read()
+                st.session_state.uploaded_audio_name = uploaded_dub_file.name
+                st.audio(st.session_state.uploaded_audio_bytes)
+
+    with col2:
+        st.markdown("### 🎧 2. Translated Audio Version (With BGM / Tunes)")
+        
+        dub_target_lang = st.selectbox(
+            "Select Language to Generate Translated Audio:",
+            options=list(SUPPORTED_LANGUAGES.keys()),
+            format_func=lambda x: f"{SUPPORTED_LANGUAGES[x]} ({x})",
+            index=0
+        )
+        
+        text_for_dubbing = st.text_area(
+            "Text/Lyrics to Dub:",
+            value=st.session_state.lyrics_data.get("plain") or st.session_state.transcript_text,
+            height=120
+        )
+        
+        if st.button("🎵 Generate Translated Audio (Vocal + BGM)", type="primary", use_container_width=True):
+            if not text_for_dubbing.strip():
+                st.error("Please provide text or lyrics to dub.")
+            else:
+                with st.spinner(f"Translating text to {SUPPORTED_LANGUAGES[dub_target_lang]} and mixing background music..."):
+                    try:
+                        # Translate first
+                        translated_content = GoogleTranslator(source="auto", target=dub_target_lang).translate(text_for_dubbing)
+                        
+                        # Generate mixed audio (TTS + BGM)
+                        final_audio_bytes = generate_translated_audio_with_bgm(
+                            translated_text=translated_content,
+                            target_lang_code=dub_target_lang,
+                            original_audio_bytes=st.session_state.uploaded_audio_bytes
+                        )
+                        
+                        st.success(f"Generated Translated Audio in {SUPPORTED_LANGUAGES[dub_target_lang]}!")
+                        st.audio(final_audio_bytes, format="audio/mp3")
+                        
+                        st.download_button(
+                            label=f"📥 Download Translated Audio ({SUPPORTED_LANGUAGES[dub_target_lang]})",
+                            data=final_audio_bytes,
+                            file_name=f"translated_{dub_target_lang}_{st.session_state.transcript_title}.mp3",
+                            mime="audio/mp3",
+                            use_container_width=True
+                        )
+                        
+                        st.markdown("**Translated Text Script:**")
+                        st.info(translated_content)
+                    except Exception as e:
+                        st.error(f"Failed to generate audio translation: {e}")
+
+# ==============================================================================
+# TAB 5: DOWNLOAD & EXPORT
+# ==============================================================================
+elif navigation == "5. Download & Export":
     st.markdown('<div class="sub-title">Download your transcripts, translations, or lyrics in TXT, SRT, VTT, LRC, or JSON format.</div>', unsafe_allow_html=True)
     
     st.subheader("1. Choose Export Data Source")
@@ -397,8 +533,6 @@ elif navigation == "4. Download & Export":
     st.markdown("---")
     st.subheader("2. Download Files")
     
-    # Format Generators
-    # TXT
     txt_data = active_text
     st.download_button(
         label="📄 Download Plain Text (.txt)",
@@ -408,7 +542,6 @@ elif navigation == "4. Download & Export":
         use_container_width=True
     )
     
-    # SRT
     if active_segs:
         srt_lines = []
         for i, s in enumerate(active_segs):
@@ -422,7 +555,6 @@ elif navigation == "4. Download & Export":
             use_container_width=True
         )
 
-    # VTT
     if active_segs:
         vtt_lines = ["WEBVTT\n"]
         for i, s in enumerate(active_segs):
@@ -436,7 +568,6 @@ elif navigation == "4. Download & Export":
             use_container_width=True
         )
 
-    # LRC
     if active_segs:
         lrc_lines = [f"[ti:{filename_prefix}]"]
         for s in active_segs:
@@ -450,7 +581,6 @@ elif navigation == "4. Download & Export":
             use_container_width=True
         )
 
-    # JSON
     json_data = json.dumps({
         "title": filename_prefix,
         "source": source_choice,

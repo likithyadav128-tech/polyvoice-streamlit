@@ -3,3 +3,5 @@ deep-translator>=1.11.4
 SpeechRecognition>=3.10.1
 requests>=2.31.0
 mutagen>=1.48.0
+gTTS>=2.5.0
+pydub>=0.25.0
