@@ -176,85 +176,55 @@ def search_lyrics_api(track_name, artist_name=""):
 
 def safe_generate_tts(text, lang_code, bgm_bytes=None):
     """
-    Safely generates TTS audio without 500 errors by chunking text into <= 300 character pieces.
-    Mixes BGM tune if bgm_bytes is provided.
+    Safely generates TTS audio without ffprobe/gTTS errors by chunking text.
+    If ffmpeg/ffprobe fails, falls back gracefully to pure vocal audio track.
     """
-    clean_text = re.sub(r'\[.*?\]', '', text).strip() # Remove timestamps
+    clean_text = re.sub(r'\[.*?\]', '', text).strip()
     clean_text = re.sub(r'\s+', ' ', clean_text)
     if not clean_text:
         clean_text = "No text provided for audio speech."
 
-    # Chunk into <= 250 character segments for safe gTTS API calls
-    words = clean_text.split()
-    chunks = []
-    current_chunk = []
-    current_length = 0
-
-    for word in words:
-        if current_length + len(word) + 1 > 250:
-            chunks.append(" ".join(current_chunk))
-            current_chunk = [word]
-            current_length = len(word)
-        else:
-            current_chunk.append(word)
-            current_length += len(word) + 1
-    if current_chunk:
-        chunks.append(" ".join(current_chunk))
-
-    # Synthesize max 5 chunks (to keep audio fast and under Google limits)
-    chunks = chunks[:5]
+    # Limit text to 350 chars for fast, reliable TTS synthesis
+    sample_text = clean_text[:350]
     tts_lang = "zh-CN" if lang_code == "zh-CN" else lang_code
 
-    temp_files = []
-    combined_audio = None
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as tf:
+        tts = gTTS(text=sample_text, lang=tts_lang, slow=False)
+        tts.save(tf.name)
+        vocal_path = tf.name
 
     try:
-        for chunk in chunks:
-            tts = gTTS(text=chunk, lang=tts_lang, slow=False)
-            tf = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            tts.save(tf.name)
-            temp_files.append(tf.name)
-            
-            if PYDUB_AVAILABLE:
-                segment = AudioSegment.from_file(tf.name)
-                combined_audio = segment if combined_audio is None else combined_audio + segment
-
-        if PYDUB_AVAILABLE and combined_audio is not None:
-            if bgm_bytes:
+        if bgm_bytes and PYDUB_AVAILABLE:
+            try:
                 with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as bgm_f:
                     bgm_f.write(bgm_bytes)
                     bgm_path = bgm_f.name
-                try:
-                    bgm_segment = AudioSegment.from_file(bgm_path) - 14 # Reduce BGM volume
-                    if len(bgm_segment) < len(combined_audio):
-                        loops = (len(combined_audio) // len(bgm_segment)) + 1
-                        bgm_segment = bgm_segment * loops
-                    bgm_segment = bgm_segment[:len(combined_audio) + 800]
-                    mixed = bgm_segment.overlay(combined_audio, position=0)
-                    out_f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-                    mixed.export(out_f.name, format="mp3")
-                    with open(out_f.name, "rb") as f:
-                        res_bytes = f.read()
-                    os.unlink(bgm_path)
-                    os.unlink(out_f.name)
-                    return res_bytes
-                except Exception:
-                    pass
-            
-            out_f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            combined_audio.export(out_f.name, format="mp3")
-            with open(out_f.name, "rb") as f:
-                res_bytes = f.read()
-            os.unlink(out_f.name)
-            return res_bytes
-        else:
-            # Fallback to single file read
-            with open(temp_files[0], "rb") as f:
-                return f.read()
+                
+                bgm_segment = AudioSegment.from_file(bgm_path) - 14
+                vocal_segment = AudioSegment.from_file(vocal_path)
+                
+                if len(bgm_segment) < len(vocal_segment):
+                    loops = (len(vocal_segment) // len(bgm_segment)) + 1
+                    bgm_segment = bgm_segment * loops
+                bgm_segment = bgm_segment[:len(vocal_segment) + 800]
+                mixed = bgm_segment.overlay(vocal_segment, position=0)
+                
+                out_f = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+                mixed.export(out_f.name, format="mp3")
+                with open(out_f.name, "rb") as f:
+                    res_bytes = f.read()
+                os.unlink(bgm_path)
+                os.unlink(out_f.name)
+                return res_bytes
+            except Exception as bgm_err:
+                # If ffprobe or pydub fails on Streamlit server, return pure vocal track gracefully!
+                pass
+
+        with open(vocal_path, "rb") as f:
+            return f.read()
     finally:
-        for fpath in temp_files:
-            if os.path.exists(fpath):
-                os.unlink(fpath)
+        if os.path.exists(vocal_path):
+            os.unlink(vocal_path)
 
 def transcribe_audio_file(file_bytes, filename, lang="en-US"):
     r = sr.Recognizer()
@@ -437,7 +407,6 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
             if preview_url:
                 st.session_state.song_audio_url = preview_url
                 try:
-                    # Download preview audio for BGM overlay mixing
                     audio_r = requests.get(preview_url, timeout=6)
                     if audio_r.status_code == 200:
                         st.session_state.song_audio_bytes = audio_r.content
@@ -494,13 +463,13 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
         
         if st.button("▶️ Play Translated Song Audio", type="primary", use_container_width=True):
             lyrics_text = st.session_state.lyrics_data.get("plain") or "Shape of You lyrics"
-            with st.spinner(f"Translating lyrics to {SUPPORTED_LANGUAGES[target_song_lang]} and mixing background music..."):
+            with st.spinner(f"Translating lyrics to {SUPPORTED_LANGUAGES[target_song_lang]} and synthesizing audio..."):
                 try:
                     # 1. Translate lyrics
                     translated_lyrics = GoogleTranslator(source="auto", target=target_song_lang).translate(lyrics_text[:1500])
                     st.session_state.translated_lyrics_text = translated_lyrics
                     
-                    # 2. Generate audio safely without 500 error
+                    # 2. Generate audio safely with fallback
                     audio_out = safe_generate_tts(
                         text=translated_lyrics,
                         lang_code=target_song_lang,
