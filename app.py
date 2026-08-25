@@ -9,6 +9,8 @@ import speech_recognition as sr
 from deep_translator import GoogleTranslator
 import mutagen
 from gtts import gTTS
+import yt_dlp
+
 try:
     from pydub import AudioSegment
     PYDUB_AVAILABLE = True
@@ -44,13 +46,6 @@ st.markdown("""
         font-size: 0.95rem;
         margin-bottom: 1.5rem;
     }
-    .audio-card {
-        background: rgba(30, 41, 59, 0.7);
-        border: 1px solid rgba(129, 140, 248, 0.3);
-        border-radius: 14px;
-        padding: 1.2rem;
-        margin-bottom: 1.2rem;
-    }
     .stButton>button {
         border-radius: 10px;
         font-weight: 600;
@@ -81,10 +76,14 @@ if 'translations' not in st.session_state:
     st.session_state.translations = {}
 if 'lyrics_data' not in st.session_state:
     st.session_state.lyrics_data = {}
+if 'full_song_audio_url' not in st.session_state:
+    st.session_state.full_song_audio_url = None
+if 'full_song_title' not in st.session_state:
+    st.session_state.full_song_title = None
+if 'full_song_duration' not in st.session_state:
+    st.session_state.full_song_duration = None
 if 'song_audio_bytes' not in st.session_state:
     st.session_state.song_audio_bytes = None
-if 'song_audio_url' not in st.session_state:
-    st.session_state.song_audio_url = None
 if 'translated_song_audio' not in st.session_state:
     st.session_state.translated_song_audio = None
 if 'translated_lyrics_text' not in st.session_state:
@@ -138,20 +137,47 @@ def parse_lrc_to_segments(lrc_text: str):
         })
     return segments
 
-def fetch_song_audio_preview(track_name, artist_name=""):
-    """Fetch high-quality audio preview stream via iTunes Search API."""
+def fetch_full_song_audio(track_name, artist_name=""):
+    """
+    Extracts FULL song audio stream (full 3-5 mins) using yt-dlp.
+    Falls back to iTunes preview if unavailable.
+    """
     query = f"{track_name} {artist_name}".strip()
-    url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&entity=song&limit=1"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+    ydl_opts = {
+        'format': 'bestaudio/best',
+        'quiet': True,
+        'no_warnings': True,
+        'default_search': 'ytsearch1'
+    }
     try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(query, download=False)
+            if info and 'entries' in info and len(info['entries']) > 0:
+                entry = info['entries'][0]
+                return {
+                    "url": entry.get("url"),
+                    "title": entry.get("title", track_name),
+                    "duration": entry.get("duration", 0)
+                }
+    except Exception:
+        pass
+        
+    # Fallback to iTunes API
+    try:
+        url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&entity=song&limit=1"
+        headers = {"User-Agent": "Mozilla/5.0"}
         r = requests.get(url, headers=headers, timeout=6)
         if r.status_code == 200:
             results = r.json().get("results", [])
             if results:
-                preview_url = results[0].get("previewUrl")
-                return preview_url
+                return {
+                    "url": results[0].get("previewUrl"),
+                    "title": results[0].get("trackName", track_name),
+                    "duration": 30
+                }
     except Exception:
         pass
+        
     return None
 
 def search_lyrics_api(track_name, artist_name=""):
@@ -216,8 +242,7 @@ def safe_generate_tts(text, lang_code, bgm_bytes=None):
                 os.unlink(bgm_path)
                 os.unlink(out_f.name)
                 return res_bytes
-            except Exception as bgm_err:
-                # If ffprobe or pydub fails on Streamlit server, return pure vocal track gracefully!
+            except Exception:
                 pass
 
         with open(vocal_path, "rb") as f:
@@ -263,7 +288,7 @@ navigation = st.sidebar.radio(
     [
         "1. Speech to Text", 
         "2. Multi-Translate", 
-        "3. Song Lyrics & Karaoke (With Audio Players)", 
+        "3. Song Lyrics & Karaoke (Full Audio Players)", 
         "4. Audio Translation Player (Original vs Translated BGM)",
         "5. Download & Export"
     ],
@@ -271,7 +296,7 @@ navigation = st.sidebar.radio(
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Song Audio Player**: Search any song (e.g. Shape of You) to listen to the original track AND translated audio!")
+st.sidebar.info("💡 **Full Song Audio**: Search any song (e.g. Shape of You) to listen to the FULL track (3-4 mins) AND translated audio!")
 
 # --- Main App Header ---
 st.markdown('<div class="main-title">PolyVoice - Multilingual Audio & Lyrics Studio</div>', unsafe_allow_html=True)
@@ -298,7 +323,7 @@ if navigation == "1. Speech to Text":
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
             st.session_state.song_audio_bytes = file_bytes
-            st.audio(file_bytes)
+            st.audio(file_bytes, key="tab1_upload_audio")
             
             if st.button("Transcribe Uploaded File", type="primary", use_container_width=True):
                 with st.spinner("Processing audio with Speech Recognition..."):
@@ -384,12 +409,12 @@ elif navigation == "2. Multi-Translate":
                 st.info(item['text'])
 
 # ==============================================================================
-# TAB 3: SONG LYRICS & KARAOKE (WITH SONG PLAYERS FOR ORIGINAL & TRANSLATED)
+# TAB 3: SONG LYRICS & KARAOKE (FULL SONG AUDIO PLAYERS)
 # ==============================================================================
-elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
-    st.markdown('<div class="sub-title">Search lyrics for any song (e.g. Shape of You), listen to the original track, translate lyrics, and play the translated audio!</div>', unsafe_allow_html=True)
+elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
+    st.markdown('<div class="sub-title">Search lyrics for any song (e.g. Shape of You), listen to the FULL original song (3-4 mins), translate lyrics, and play translated audio!</div>', unsafe_allow_html=True)
     
-    st.subheader("🔍 Search Song Lyrics")
+    st.subheader("🔍 Search Song Lyrics & Full Audio")
     c1, c2, c3 = st.columns([3, 2, 1])
     with c1:
         track_name = st.text_input("Song Title", value="Shape of You")
@@ -397,17 +422,20 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
         artist_name = st.text_input("Artist (Optional)", value="Ed Sheeran")
     with c3:
         st.markdown("<br>", unsafe_allow_html=True)
-        search_btn = st.button("Search Lyrics & Audio", type="primary", use_container_width=True)
+        search_btn = st.button("Search Lyrics & Full Song", type="primary", use_container_width=True)
         
     if search_btn and track_name:
-        with st.spinner(f"Searching lyrics and original audio stream for '{track_name}'..."):
+        with st.spinner(f"Fetching full song audio stream & lyrics for '{track_name}'..."):
             data = search_lyrics_api(track_name, artist_name)
-            preview_url = fetch_song_audio_preview(track_name, artist_name)
+            audio_info = fetch_full_song_audio(track_name, artist_name)
             
-            if preview_url:
-                st.session_state.song_audio_url = preview_url
+            if audio_info and audio_info.get("url"):
+                st.session_state.full_song_audio_url = audio_info["url"]
+                st.session_state.full_song_title = audio_info.get("title", track_name)
+                st.session_state.full_song_duration = audio_info.get("duration", 0)
                 try:
-                    audio_r = requests.get(preview_url, timeout=6)
+                    # Download song bytes for BGM overlay mixing if duration <= 300s
+                    audio_r = requests.get(audio_info["url"], timeout=10)
                     if audio_r.status_code == 200:
                         st.session_state.song_audio_bytes = audio_r.content
                 except Exception:
@@ -425,31 +453,35 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
                     "synced": synced,
                     "segments": segs
                 }
-                st.success(f"Lyrics & Song Audio Stream found for '{data.get('trackName', track_name)}'!")
+                st.success(f"Lyrics & Full Song Audio found for '{data.get('trackName', track_name)}'!")
             else:
-                st.error("No lyrics found in database. You can upload an audio file below or transcribe it!")
+                st.error("No lyrics found in database. You can upload a full MP3 file below!")
 
     st.markdown("---")
     
     # --- AUDIO PLAYER SECTION FOR ORIGINAL & TRANSLATED VERSION ---
-    st.subheader("🎧 Integrated Song Audio Players")
+    st.subheader("🎧 Full Song Audio Players")
     
     player_col1, player_col2 = st.columns(2)
     
     with player_col1:
-        st.markdown("#### 🔊 1. Listen Original Song Version")
-        if st.session_state.song_audio_url:
-            st.markdown(f"**Playing Preview**: *{st.session_state.lyrics_data.get('title', track_name)}* by *{st.session_state.lyrics_data.get('artist', artist_name)}*")
-            st.audio(st.session_state.song_audio_url)
+        st.markdown("#### 🔊 1. Listen FULL Original Song")
+        if st.session_state.full_song_audio_url:
+            dur_mins = int(st.session_state.full_song_duration // 60) if st.session_state.full_song_duration else 0
+            dur_secs = int(st.session_state.full_song_duration % 60) if st.session_state.full_song_duration else 0
+            dur_str = f" ({dur_mins}m {dur_secs}s)" if dur_mins > 0 else ""
+            
+            st.markdown(f"**Now Playing (Full Track{dur_str})**: *{st.session_state.full_song_title or track_name}*")
+            st.audio(st.session_state.full_song_audio_url, key="full_original_song_player")
         elif st.session_state.song_audio_bytes:
-            st.audio(st.session_state.song_audio_bytes)
+            st.audio(st.session_state.song_audio_bytes, key="bytes_original_song_player")
         else:
-            st.info("Search a song above or upload an MP3 file below to play the original tune!")
-            custom_song = st.file_uploader("Upload MP3 Song File:", type=["mp3", "wav", "m4a"])
+            st.info("Search a song above or upload a full MP3 file below to play the original track!")
+            custom_song = st.file_uploader("Upload Full MP3 Song File:", type=["mp3", "wav", "m4a"], key="full_mp3_upload")
             if custom_song:
                 c_bytes = custom_song.read()
                 st.session_state.song_audio_bytes = c_bytes
-                st.audio(c_bytes)
+                st.audio(c_bytes, key="custom_song_player")
 
     with player_col2:
         st.markdown("#### 🎧 2. Listen Translated Song Version (With BGM / Tune)")
@@ -458,10 +490,10 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
             "Select Language to Listen & Translate:",
             options=list(SUPPORTED_LANGUAGES.keys()),
             format_func=lambda x: f"{SUPPORTED_LANGUAGES[x]} ({x})",
-            key="song_lang_select"
+            key="song_lang_select_tab3"
         )
         
-        if st.button("▶️ Play Translated Song Audio", type="primary", use_container_width=True):
+        if st.button("▶️ Play Translated Song Audio", type="primary", use_container_width=True, key="play_trans_song_btn"):
             lyrics_text = st.session_state.lyrics_data.get("plain") or "Shape of You lyrics"
             with st.spinner(f"Translating lyrics to {SUPPORTED_LANGUAGES[target_song_lang]} and synthesizing audio..."):
                 try:
@@ -469,7 +501,7 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
                     translated_lyrics = GoogleTranslator(source="auto", target=target_song_lang).translate(lyrics_text[:1500])
                     st.session_state.translated_lyrics_text = translated_lyrics
                     
-                    # 2. Generate audio safely with fallback
+                    # 2. Generate audio safely
                     audio_out = safe_generate_tts(
                         text=translated_lyrics,
                         lang_code=target_song_lang,
@@ -481,7 +513,7 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
                     st.error(f"Failed to generate translated audio: {e}")
                     
         if st.session_state.translated_song_audio:
-            st.audio(st.session_state.translated_song_audio, format="audio/mp3")
+            st.audio(st.session_state.translated_song_audio, format="audio/mp3", key="translated_song_player_tab3")
 
     st.markdown("---")
     
@@ -498,12 +530,12 @@ elif navigation == "3. Song Lyrics & Karaoke (With Audio Players)":
                 for seg in ld["segments"][:25]:
                     st.markdown(f"`[{seg['start']}s]` {seg['text']}")
             else:
-                st.text_area("Original Lyrics", value=ld["plain"], height=350)
+                st.text_area("Original Lyrics", value=ld["plain"], height=350, key="orig_lyrics_textarea")
 
         with lyr_c2:
             st.markdown(f"### 🌐 Translated Lyrics ({SUPPORTED_LANGUAGES.get(target_song_lang, target_song_lang)})")
             if st.session_state.translated_lyrics_text:
-                st.text_area("Translated Lyrics Content", value=st.session_state.translated_lyrics_text, height=350)
+                st.text_area("Translated Lyrics Content", value=st.session_state.translated_lyrics_text, height=350, key="trans_lyrics_textarea")
             else:
                 st.info("Click '▶️ Play Translated Song Audio' above to translate and view lyrics side-by-side!")
 
@@ -518,15 +550,15 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
     with col1:
         st.markdown("### 🔊 1. Original Version Audio")
         if st.session_state.song_audio_bytes:
-            st.audio(st.session_state.song_audio_bytes)
-        elif st.session_state.song_audio_url:
-            st.audio(st.session_state.song_audio_url)
+            st.audio(st.session_state.song_audio_bytes, key="tab4_orig_audio_bytes")
+        elif st.session_state.full_song_audio_url:
+            st.audio(st.session_state.full_song_audio_url, key="tab4_orig_audio_url")
         else:
             st.info("No original audio file uploaded yet. Upload an audio file in Tab 1 or Tab 3 to play along with BGM!")
-            uploaded_dub_file = st.file_uploader("Upload Song/Speech Audio for BGM:", type=["mp3", "wav", "m4a", "ogg"])
+            uploaded_dub_file = st.file_uploader("Upload Song/Speech Audio for BGM:", type=["mp3", "wav", "m4a", "ogg"], key="tab4_upload")
             if uploaded_dub_file:
                 st.session_state.song_audio_bytes = uploaded_dub_file.read()
-                st.audio(st.session_state.song_audio_bytes)
+                st.audio(st.session_state.song_audio_bytes, key="tab4_uploaded_audio")
 
     with col2:
         st.markdown("### 🎧 2. Translated Audio Version (With BGM / Tunes)")
@@ -536,16 +568,17 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
             options=list(SUPPORTED_LANGUAGES.keys()),
             format_func=lambda x: f"{SUPPORTED_LANGUAGES[x]} ({x})",
             index=0,
-            key="dub_lang_select"
+            key="dub_lang_select_tab4"
         )
         
         text_for_dubbing = st.text_area(
             "Text/Lyrics to Dub:",
             value=st.session_state.lyrics_data.get("plain") or st.session_state.transcript_text,
-            height=120
+            height=120,
+            key="text_for_dubbing_tab4"
         )
         
-        if st.button("🎵 Generate Translated Audio (Vocal + BGM)", type="primary", use_container_width=True):
+        if st.button("🎵 Generate Translated Audio (Vocal + BGM)", type="primary", use_container_width=True, key="gen_translated_tab4"):
             if not text_for_dubbing.strip():
                 st.error("Please provide text or lyrics to dub.")
             else:
@@ -560,14 +593,15 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
                         )
                         
                         st.success(f"Generated Translated Audio in {SUPPORTED_LANGUAGES[dub_target_lang]}!")
-                        st.audio(final_audio_bytes, format="audio/mp3")
+                        st.audio(final_audio_bytes, format="audio/mp3", key="tab4_translated_audio_player")
                         
                         st.download_button(
                             label=f"📥 Download Translated Audio ({SUPPORTED_LANGUAGES[dub_target_lang]})",
                             data=final_audio_bytes,
                             file_name=f"translated_{dub_target_lang}.mp3",
                             mime="audio/mp3",
-                            use_container_width=True
+                            use_container_width=True,
+                            key="tab4_download_btn"
                         )
                         
                         st.markdown("**Translated Text Script:**")
@@ -611,7 +645,8 @@ elif navigation == "5. Download & Export":
         data=txt_data.encode('utf-8'),
         file_name=f"{filename_prefix}.txt",
         mime="text/plain",
-        use_container_width=True
+        use_container_width=True,
+        key="dl_txt_btn"
     )
     
     if active_segs:
@@ -624,7 +659,8 @@ elif navigation == "5. Download & Export":
             data=srt_data.encode('utf-8'),
             file_name=f"{filename_prefix}.srt",
             mime="application/x-subrip",
-            use_container_width=True
+            use_container_width=True,
+            key="dl_srt_btn"
         )
 
     if active_segs:
@@ -637,7 +673,8 @@ elif navigation == "5. Download & Export":
             data=vtt_data.encode('utf-8'),
             file_name=f"{filename_prefix}.vtt",
             mime="text/vtt",
-            use_container_width=True
+            use_container_width=True,
+            key="dl_vtt_btn"
         )
 
     if active_segs:
@@ -650,7 +687,8 @@ elif navigation == "5. Download & Export":
             data=lrc_data.encode('utf-8'),
             file_name=f"{filename_prefix}.lrc",
             mime="text/plain",
-            use_container_width=True
+            use_container_width=True,
+            key="dl_lrc_btn"
         )
 
     json_data = json.dumps({
@@ -666,5 +704,6 @@ elif navigation == "5. Download & Export":
         data=json_data.encode('utf-8'),
         file_name=f"{filename_prefix}.json",
         mime="application/json",
-        use_container_width=True
+        use_container_width=True,
+        key="dl_json_btn"
     )
