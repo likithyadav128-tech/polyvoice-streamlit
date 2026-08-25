@@ -210,7 +210,6 @@ def safe_generate_tts(text, lang_code, bgm_bytes=None):
     if not clean_text:
         clean_text = "No text provided for audio speech."
 
-    # Limit text to 350 chars for fast, reliable TTS synthesis
     sample_text = clean_text[:350]
     tts_lang = "zh-CN" if lang_code == "zh-CN" else lang_code
 
@@ -323,7 +322,7 @@ if navigation == "1. Speech to Text":
         if uploaded_file is not None:
             file_bytes = uploaded_file.read()
             st.session_state.song_audio_bytes = file_bytes
-            st.audio(file_bytes, key="tab1_upload_audio")
+            st.audio(file_bytes)
             
             if st.button("Transcribe Uploaded File", type="primary", use_container_width=True):
                 with st.spinner("Processing audio with Speech Recognition..."):
@@ -434,7 +433,6 @@ elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
                 st.session_state.full_song_title = audio_info.get("title", track_name)
                 st.session_state.full_song_duration = audio_info.get("duration", 0)
                 try:
-                    # Download song bytes for BGM overlay mixing if duration <= 300s
                     audio_r = requests.get(audio_info["url"], timeout=10)
                     if audio_r.status_code == 200:
                         st.session_state.song_audio_bytes = audio_r.content
@@ -472,16 +470,16 @@ elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
             dur_str = f" ({dur_mins}m {dur_secs}s)" if dur_mins > 0 else ""
             
             st.markdown(f"**Now Playing (Full Track{dur_str})**: *{st.session_state.full_song_title or track_name}*")
-            st.audio(st.session_state.full_song_audio_url, key="full_original_song_player")
+            st.audio(st.session_state.full_song_audio_url)
         elif st.session_state.song_audio_bytes:
-            st.audio(st.session_state.song_audio_bytes, key="bytes_original_song_player")
+            st.audio(st.session_state.song_audio_bytes)
         else:
             st.info("Search a song above or upload a full MP3 file below to play the original track!")
             custom_song = st.file_uploader("Upload Full MP3 Song File:", type=["mp3", "wav", "m4a"], key="full_mp3_upload")
             if custom_song:
                 c_bytes = custom_song.read()
                 st.session_state.song_audio_bytes = c_bytes
-                st.audio(c_bytes, key="custom_song_player")
+                st.audio(c_bytes)
 
     with player_col2:
         st.markdown("#### 🎧 2. Listen Translated Song Version (With BGM / Tune)")
@@ -497,11 +495,9 @@ elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
             lyrics_text = st.session_state.lyrics_data.get("plain") or "Shape of You lyrics"
             with st.spinner(f"Translating lyrics to {SUPPORTED_LANGUAGES[target_song_lang]} and synthesizing audio..."):
                 try:
-                    # 1. Translate lyrics
                     translated_lyrics = GoogleTranslator(source="auto", target=target_song_lang).translate(lyrics_text[:1500])
                     st.session_state.translated_lyrics_text = translated_lyrics
                     
-                    # 2. Generate audio safely
                     audio_out = safe_generate_tts(
                         text=translated_lyrics,
                         lang_code=target_song_lang,
@@ -513,7 +509,7 @@ elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
                     st.error(f"Failed to generate translated audio: {e}")
                     
         if st.session_state.translated_song_audio:
-            st.audio(st.session_state.translated_song_audio, format="audio/mp3", key="translated_song_player_tab3")
+            st.audio(st.session_state.translated_song_audio, format="audio/mp3")
 
     st.markdown("---")
     
@@ -550,15 +546,15 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
     with col1:
         st.markdown("### 🔊 1. Original Version Audio")
         if st.session_state.song_audio_bytes:
-            st.audio(st.session_state.song_audio_bytes, key="tab4_orig_audio_bytes")
+            st.audio(st.session_state.song_audio_bytes)
         elif st.session_state.full_song_audio_url:
-            st.audio(st.session_state.full_song_audio_url, key="tab4_orig_audio_url")
+            st.audio(st.session_state.full_song_audio_url)
         else:
             st.info("No original audio file uploaded yet. Upload an audio file in Tab 1 or Tab 3 to play along with BGM!")
             uploaded_dub_file = st.file_uploader("Upload Song/Speech Audio for BGM:", type=["mp3", "wav", "m4a", "ogg"], key="tab4_upload")
             if uploaded_dub_file:
                 st.session_state.song_audio_bytes = uploaded_dub_file.read()
-                st.audio(st.session_state.song_audio_bytes, key="tab4_uploaded_audio")
+                st.audio(st.session_state.song_audio_bytes)
 
     with col2:
         st.markdown("### 🎧 2. Translated Audio Version (With BGM / Tunes)")
@@ -593,7 +589,7 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
                         )
                         
                         st.success(f"Generated Translated Audio in {SUPPORTED_LANGUAGES[dub_target_lang]}!")
-                        st.audio(final_audio_bytes, format="audio/mp3", key="tab4_translated_audio_player")
+                        st.audio(final_audio_bytes, format="audio/mp3")
                         
                         st.download_button(
                             label=f"📥 Download Translated Audio ({SUPPORTED_LANGUAGES[dub_target_lang]})",
