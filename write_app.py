@@ -1,4 +1,5 @@
-import os
+﻿with open(r'C:\Users\likit\polyvoice-streamlit\app.py', 'w', encoding='utf-8') as f:
+    f.write('''import os
 import re
 import json
 import tempfile
@@ -111,8 +112,8 @@ def format_seconds_to_lrc_time(seconds: float) -> str:
 
 def parse_lrc_to_segments(lrc_text: str):
     segments = []
-    lines = lrc_text.strip().split("\n")
-    time_regex = re.compile(r"\[(\d+):(\d+)(?:\.(\d+))?\]")
+    lines = lrc_text.strip().split("\\n")
+    time_regex = re.compile(r"\\[(\\d+):(\\d+)(?:\\.(\\d+))?\\]")
     parsed_lines = []
     for line in lines:
         match = time_regex.search(line)
@@ -144,7 +145,7 @@ def robust_translate_text(text, target_lang, source_lang="en"):
     if not text or not text.strip():
         return ""
     
-    lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
+    lines = [line.strip() for line in text.strip().split("\\n") if line.strip()]
     if not lines:
         return ""
         
@@ -179,7 +180,7 @@ def robust_translate_text(text, target_lang, source_lang="en"):
 
         translated_lines.append(translated_str if translated_str else line)
         
-    return '\n'.join(translated_lines)
+    return "\\n".join(translated_lines)
 
 def fetch_full_song_audio(track_name, artist_name=""):
     """
@@ -244,8 +245,8 @@ def search_lyrics_api(track_name, artist_name=""):
         return None
 
 def safe_generate_tts(text, lang_code, bgm_bytes=None):
-    clean_text = re.sub(r'\[.*?\]', '', text).strip()
-    clean_text = re.sub(r'\s+', ' ', clean_text)
+    clean_text = re.sub(r'\\[.*?\\]', '', text).strip()
+    clean_text = re.sub(r'\\s+', ' ', clean_text)
     if not clean_text:
         clean_text = "No text provided for audio speech."
 
@@ -300,7 +301,7 @@ def transcribe_audio_file(file_bytes, filename, lang="en-US"):
             audio_data = r.record(source)
             text = r.recognize_google(audio_data, language=lang)
             
-            sentences = re.split(r'(?<=[.?!,\n])\s+', text)
+            sentences = re.split(r'(?<=[.?!,\\n])\\s+', text)
             sentences = [s.strip() for s in sentences if s.strip()] or [text]
             segments = []
             cur_time = 0.0
@@ -737,3 +738,5 @@ elif navigation == "5. Download & Export":
         use_container_width=True,
         key="dl_json_btn"
     )
+''')
+print("Successfully wrote app.py!")
