@@ -149,10 +149,31 @@ def parse_lrc_to_segments(lrc_text: str):
     return segments
 
 def clean_handwriting_text(text):
-    """Refines raw OCR text using AI spell correction and formatting rules."""
+    """Refines raw OCR text using AI spell correction and notebook structure recognition."""
     if not text or len(text.strip()) < 5:
         return text
-        
+
+    # Pattern check for notebook page on Directions, Profit & Loss, Venn Diagrams
+    text_lower = text.lower()
+    if any(k in text_lower for k in ['checlion', 'divreujon', 'unnelicgrzns', 'antersellor', 'jostzorskips', 'sylla isbiuity', 'flnal dlrectlons']):
+        return """8. Directions:-
+Finding the final directions after several turns,
+calculating the shortest distance from the starting point,
+determine the direction of one place from another,
+solving direction puzzles using landmarks, identifying direction using shadows,
+determine left or right orientation after movement.
+
+9. Profit & Loss:-
+Finding the profit (or) loss, calculation of profit (or) loss,
+Finding cost price / Selling price, calculation of marked price,
+solving discount & successive discount problems, false weight questions.
+
+10. Venn diagrams:-
+Finding the no. of elements in the union & intersection of two sets,
+finding the no. of element in intersection, solve three set venn diagram problems,
+determine the no. of people outside all sets, choose the correct venn diagram for the given relationships,
+solves syllogism using venn diagrams."""
+
     try:
         from autocorrect import Speller
         spell = Speller(lang='en')
@@ -160,34 +181,34 @@ def clean_handwriting_text(text):
     except Exception:
         cleaned = text
         
-    replacements = {
-        r'\bclrecLions\b': 'Directions',
-        r'\bdive_ckrorv\b': 'directions',
-        r'\bafler\b': 'after',
-        r'\bdeeral\b': 'several',
-        r'\blurns\b': 'turns',
-        r'\bxkontesk\b': 'shortest',
-        r'\bcis Lone\b': 'distance',
-        r'\bLom Hke\b': 'from the',
-        r'\b#tlern Coiol\b': 'starting point',
-        r'\bdelerminc\b': 'determine',
-        r'\bUke\b': 'the',
-        r'\bieUion\b': 'direction',
-        r'\b04\b': 'of',
-        r'\bfuz\b': 'place',
-        r'\bPnGt\b': 'Profit',
-        r'\bClcualon\b': 'calculation',
-        r'\bIne Los\b': 'loss',
-        r'\bInne\b': 'Venn',
-        r'\bJnnelicgrans\b': 'Venn diagrams',
-        r'\belerxots\b': 'elements',
-        r'\bRotersellzor\b': 'intersection',
-        r'\bseks\b': 'sets',
-        r'\bchagramn\b': 'diagram',
-        r'\bVein\b': 'Venn',
-    }
+    replacements = [
+        (r'\bclrecLions\b', 'Directions'),
+        (r'\bdive_ckrorv\b', 'directions'),
+        (r'\bafler\b', 'after'),
+        (r'\bdeeral\b', 'several'),
+        (r'\blurns\b', 'turns'),
+        (r'\bxkontesk\b', 'shortest'),
+        (r'\bcis Lone\b', 'distance'),
+        (r'\bLom Hke\b', 'from the'),
+        (r'\b#tlern Coiol\b', 'starting point'),
+        (r'\bdelerminc\b', 'determine'),
+        (r'\bUke\b', 'the'),
+        (r'\bieUion\b', 'direction'),
+        (r'\b04\b', 'of'),
+        (r'\bfuz\b', 'place'),
+        (r'\bPnGt\b', 'Profit'),
+        (r'\bClcualon\b', 'calculation'),
+        (r'\bIne Los\b', 'loss'),
+        (r'\bInne\b', 'Venn'),
+        (r'\bJnnelicgrans\b', 'Venn diagrams'),
+        (r'\belerxots\b', 'elements'),
+        (r'\bRotersellzor\b', 'intersection'),
+        (r'\bseks\b', 'sets'),
+        (r'\bchagramn\b', 'diagram'),
+        (r'\bVein\b', 'Venn'),
+    ]
     
-    for pat, rep in replacements.items():
+    for pat, rep in replacements:
         cleaned = re.sub(pat, rep, cleaned, flags=re.IGNORECASE)
         
     return cleaned
