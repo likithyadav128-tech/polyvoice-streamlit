@@ -1,4 +1,5 @@
 import os
+import io
 import re
 import json
 import tempfile
@@ -150,28 +151,47 @@ def parse_lrc_to_segments(lrc_text: str):
 def extract_text_from_image(image_bytes):
     """Extracts text from handwritten notes or scanned images using OCR."""
     try:
-        img = Image.open(tempfile.BytesIO(image_bytes))
+        raw_img = Image.open(io.BytesIO(image_bytes))
+        
+        # 1. Try PyTesseract with multiple PSM modes
         if PYTESSERACT_AVAILABLE:
             try:
-                extracted = pytesseract.image_to_string(img)
-                if extracted and extracted.strip():
-                    return extracted.strip()
+                # Try PSM 6 (uniform text block)
+                text6 = pytesseract.image_to_string(raw_img, config='--psm 6')
+                if text6 and len(text6.strip()) > 5:
+                    return text6.strip()
+                # Try default PSM
+                text_def = pytesseract.image_to_string(raw_img)
+                if text_def and len(text_def.strip()) > 5:
+                    return text_def.strip()
             except Exception:
                 pass
         
+        # 2. Try EasyOCR (PyTorch based - outstanding for handwritten text)
         try:
             import easyocr
-            reader = easyocr.Reader(['en'])
+            reader = easyocr.Reader(['en'], gpu=False)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
-                img.save(tmp.name)
+                raw_img.save(tmp.name)
                 tmp_path = tmp.name
             results = reader.readtext(tmp_path, detail=0)
-            os.unlink(tmp_path)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
             if results:
                 return "\n".join(results)
         except Exception:
             pass
             
+        # 3. Grayscale image fallback for PyTesseract
+        if PYTESSERACT_AVAILABLE:
+            try:
+                gray_img = raw_img.convert("L")
+                text_gray = pytesseract.image_to_string(gray_img)
+                if text_gray and text_gray.strip():
+                    return text_gray.strip()
+            except Exception:
+                pass
+                
         return "(Unable to read handwritten text or image OCR. Please upload a clear image of handwritten or printed notes.)"
     except Exception as e:
         return f"Error processing image: {e}"
@@ -183,7 +203,7 @@ def extract_text_from_document(uploaded_file):
     
     if filename.endswith(".pdf"):
         try:
-            reader = pypdf.PdfReader(tempfile.BytesIO(file_bytes))
+            reader = pypdf.PdfReader(io.BytesIO(file_bytes))
             text_pages = [page.extract_text() for page in reader.pages if page.extract_text()]
             return "\n\n".join(text_pages) if text_pages else "(PDF contains no extractable text. Upload a scanned image of the document to use OCR!)"
         except Exception as e:
@@ -191,7 +211,7 @@ def extract_text_from_document(uploaded_file):
             
     elif filename.endswith(".docx"):
         try:
-            doc = docx.Document(tempfile.BytesIO(file_bytes))
+            doc = docx.Document(io.BytesIO(file_bytes))
             paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
             return "\n".join(paragraphs)
         except Exception as e:
