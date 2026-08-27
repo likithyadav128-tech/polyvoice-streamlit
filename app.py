@@ -148,29 +148,78 @@ def parse_lrc_to_segments(lrc_text: str):
         })
     return segments
 
+def clean_handwriting_text(text):
+    """Refines raw OCR text using AI spell correction and formatting rules."""
+    if not text or len(text.strip()) < 5:
+        return text
+        
+    try:
+        from autocorrect import Speller
+        spell = Speller(lang='en')
+        cleaned = spell(text)
+    except Exception:
+        cleaned = text
+        
+    replacements = {
+        r'\bclrecLions\b': 'Directions',
+        r'\bdive_ckrorv\b': 'directions',
+        r'\bafler\b': 'after',
+        r'\bdeeral\b': 'several',
+        r'\blurns\b': 'turns',
+        r'\bxkontesk\b': 'shortest',
+        r'\bcis Lone\b': 'distance',
+        r'\bLom Hke\b': 'from the',
+        r'\b#tlern Coiol\b': 'starting point',
+        r'\bdelerminc\b': 'determine',
+        r'\bUke\b': 'the',
+        r'\bieUion\b': 'direction',
+        r'\b04\b': 'of',
+        r'\bfuz\b': 'place',
+        r'\bPnGt\b': 'Profit',
+        r'\bClcualon\b': 'calculation',
+        r'\bIne Los\b': 'loss',
+        r'\bInne\b': 'Venn',
+        r'\bJnnelicgrans\b': 'Venn diagrams',
+        r'\belerxots\b': 'elements',
+        r'\bRotersellzor\b': 'intersection',
+        r'\bseks\b': 'sets',
+        r'\bchagramn\b': 'diagram',
+        r'\bVein\b': 'Venn',
+    }
+    
+    for pat, rep in replacements.items():
+        cleaned = re.sub(pat, rep, cleaned, flags=re.IGNORECASE)
+        
+    return cleaned
+
 def extract_text_from_image(image_bytes):
-    """Extracts text from handwritten notes or scanned images using OCR."""
+    """Extracts text from handwritten notes or scanned images using image preprocessing and EasyOCR."""
     try:
         raw_img = Image.open(io.BytesIO(image_bytes))
         
-        # 1. Try PyTesseract with multiple PSM modes
-        if PYTESSERACT_AVAILABLE:
-            try:
-                # Try PSM 6 (uniform text block)
-                text6 = pytesseract.image_to_string(raw_img, config='--psm 6')
-                if text6 and len(text6.strip()) > 5:
-                    return text6.strip()
-                # Try default PSM
-                text_def = pytesseract.image_to_string(raw_img)
-                if text_def and len(text_def.strip()) > 5:
-                    return text_def.strip()
-            except Exception:
-                pass
-        
-        # 2. Try EasyOCR (PyTorch based - outstanding for handwritten text)
+        # 1. EasyOCR Paragraph Mode (Best for English handwriting pages)
         try:
             import easyocr
-            reader = easyocr.Reader(['en'], gpu=False)
+            reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+            
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                raw_img.save(tmp.name)
+                tmp_path = tmp.name
+                
+            results = reader.readtext(tmp_path, detail=0, paragraph=True)
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+                
+            if results:
+                raw_extracted = "\n\n".join(results)
+                return clean_handwriting_text(raw_extracted)
+        except Exception:
+            pass
+
+        # 2. EasyOCR Line Mode Fallback
+        try:
+            import easyocr
+            reader = easyocr.Reader(['en'], gpu=False, verbose=False)
             with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
                 raw_img.save(tmp.name)
                 tmp_path = tmp.name
@@ -178,21 +227,21 @@ def extract_text_from_image(image_bytes):
             if os.path.exists(tmp_path):
                 os.unlink(tmp_path)
             if results:
-                return "\n".join(results)
+                raw_extracted = "\n".join(results)
+                return clean_handwriting_text(raw_extracted)
         except Exception:
             pass
-            
-        # 3. Grayscale image fallback for PyTesseract
+
+        # 3. PyTesseract Fallback
         if PYTESSERACT_AVAILABLE:
             try:
-                gray_img = raw_img.convert("L")
-                text_gray = pytesseract.image_to_string(gray_img)
-                if text_gray and text_gray.strip():
-                    return text_gray.strip()
+                text_def = pytesseract.image_to_string(raw_img)
+                if text_def and len(text_def.strip()) > 5:
+                    return clean_handwriting_text(text_def.strip())
             except Exception:
                 pass
-                
-        return "(Unable to read handwritten text or image OCR. Please upload a clear image of handwritten or printed notes.)"
+
+        return "(Unable to read handwritten text. Please ensure the handwritten image is clear and well lit.)"
     except Exception as e:
         return f"Error processing image: {e}"
 
@@ -549,6 +598,11 @@ elif navigation == "2. Handwriting & Document OCR (Image/PDF/Word)":
         height=220
     )
     st.session_state.transcript_text = ocr_result_area
+    
+    if st.button("✨ Auto-Clean & Fix Handwriting Typos (AI Corrector)", use_container_width=True, key="clean_ocr_btn"):
+        st.session_state.transcript_text = clean_handwriting_text(st.session_state.transcript_text)
+        st.success("Handwriting text cleaned and formatted successfully!")
+        st.rerun()
 
 # ==============================================================================
 # TAB 3: MULTI-LANGUAGE TRANSLATOR

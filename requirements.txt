@@ -11,3 +11,5 @@ pytesseract>=0.3.10
 pypdf>=4.0.0
 python-docx>=1.0.0
 easyocr>=1.7.0
+autocorrect>=2.6.0
+pyspellchecker>=0.8.0
