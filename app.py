@@ -10,6 +10,15 @@ from deep_translator import GoogleTranslator
 import mutagen
 from gtts import gTTS
 import yt_dlp
+from PIL import Image
+import pypdf
+import docx
+
+try:
+    import pytesseract
+    PYTESSERACT_AVAILABLE = True
+except Exception:
+    PYTESSERACT_AVAILABLE = False
 
 try:
     from pydub import AudioSegment
@@ -19,8 +28,8 @@ except Exception:
 
 # --- Streamlit Page Configuration ---
 st.set_page_config(
-    page_title="PolyVoice - Audio Transcriber, Translator & Lyrics Hub",
-    page_icon="🎙️",
+    page_title="PolyVoice - All-in-One Text, Audio & Document Studio",
+    page_icon="✍️",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -63,14 +72,14 @@ SUPPORTED_LANGUAGES = {
 
 # --- Initialize Session State ---
 if 'transcript_text' not in st.session_state:
-    st.session_state.transcript_text = "Welcome to PolyVoice! You can record your microphone or upload an audio file to convert speech to text."
+    st.session_state.transcript_text = "Welcome to PolyVoice Studio! Upload handwritten notes, documents, audio files, or speech to translate and summarize."
 if 'transcript_segments' not in st.session_state:
     st.session_state.transcript_segments = [
-        {"id": 1, "start": 0.0, "end": 4.5, "text": "Welcome to PolyVoice!"},
-        {"id": 2, "start": 4.5, "end": 9.0, "text": "You can record your microphone or upload an audio file to convert speech to text."}
+        {"id": 1, "start": 0.0, "end": 4.5, "text": "Welcome to PolyVoice Studio!"},
+        {"id": 2, "start": 4.5, "end": 9.0, "text": "Upload handwritten notes, documents, audio files, or speech to translate and summarize."}
     ]
 if 'transcript_title' not in st.session_state:
-    st.session_state.transcript_title = "PolyVoice_Transcript"
+    st.session_state.transcript_title = "PolyVoice_Document"
 if 'translations' not in st.session_state:
     st.session_state.translations = {}
 if 'lyrics_data' not in st.session_state:
@@ -87,6 +96,8 @@ if 'translated_song_audio' not in st.session_state:
     st.session_state.translated_song_audio = None
 if 'translated_lyrics_text' not in st.session_state:
     st.session_state.translated_lyrics_text = None
+if 'summary_result' not in st.session_state:
+    st.session_state.summary_result = None
 
 # --- Helper Functions ---
 def format_seconds_to_srt_time(seconds: float) -> str:
@@ -136,27 +147,105 @@ def parse_lrc_to_segments(lrc_text: str):
         })
     return segments
 
+def extract_text_from_image(image_bytes):
+    """Extracts text from handwritten notes or scanned images using OCR."""
+    try:
+        img = Image.open(tempfile.BytesIO(image_bytes))
+        if PYTESSERACT_AVAILABLE:
+            try:
+                extracted = pytesseract.image_to_string(img)
+                if extracted and extracted.strip():
+                    return extracted.strip()
+            except Exception:
+                pass
+        
+        try:
+            import easyocr
+            reader = easyocr.Reader(['en'])
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".png") as tmp:
+                img.save(tmp.name)
+                tmp_path = tmp.name
+            results = reader.readtext(tmp_path, detail=0)
+            os.unlink(tmp_path)
+            if results:
+                return "\n".join(results)
+        except Exception:
+            pass
+            
+        return "(Unable to read handwritten text or image OCR. Please upload a clear image of handwritten or printed notes.)"
+    except Exception as e:
+        return f"Error processing image: {e}"
+
+def extract_text_from_document(uploaded_file):
+    """Extracts text from PDF, DOCX, or TXT documents."""
+    filename = uploaded_file.name.lower()
+    file_bytes = uploaded_file.read()
+    
+    if filename.endswith(".pdf"):
+        try:
+            reader = pypdf.PdfReader(tempfile.BytesIO(file_bytes))
+            text_pages = [page.extract_text() for page in reader.pages if page.extract_text()]
+            return "\n\n".join(text_pages) if text_pages else "(PDF contains no extractable text. Upload a scanned image of the document to use OCR!)"
+        except Exception as e:
+            return f"Error reading PDF: {e}"
+            
+    elif filename.endswith(".docx"):
+        try:
+            doc = docx.Document(tempfile.BytesIO(file_bytes))
+            paragraphs = [p.text for p in doc.paragraphs if p.text.strip()]
+            return "\n".join(paragraphs)
+        except Exception as e:
+            return f"Error reading Word Document: {e}"
+            
+    elif filename.endswith(".txt"):
+        try:
+            return file_bytes.decode("utf-8", errors="ignore")
+        except Exception as e:
+            return f"Error reading Text File: {e}"
+            
+    return "(Unsupported document format)"
+
+def generate_ai_summary(text):
+    """Generates Executive Summary & Key Bullet Points."""
+    clean_text = re.sub(r'\s+', ' ', text).strip()
+    if not clean_text or len(clean_text) < 10:
+        return {
+            "exec_summary": "Text is too short to summarize.",
+            "bullet_points": ["Please provide a longer document or transcript."],
+            "word_count": len(clean_text.split()),
+            "char_count": len(clean_text)
+        }
+        
+    sentences = re.split(r'(?<=[.?!])\s+', clean_text)
+    sentences = [s.strip() for s in sentences if len(s.strip()) > 10]
+    
+    if len(sentences) <= 3:
+        exec_summary = clean_text
+        bullets = sentences
+    else:
+        exec_summary = " ".join([sentences[0], sentences[len(sentences)//2], sentences[-1]])
+        step = max(1, len(sentences) // 5)
+        bullets = [sentences[i] for i in range(0, len(sentences), step)][:5]
+        
+    return {
+        "exec_summary": exec_summary,
+        "bullet_points": bullets,
+        "word_count": len(clean_text.split()),
+        "char_count": len(clean_text)
+    }
+
 def robust_translate_text(text, target_lang, source_lang="en"):
-    """
-    Robust translation engine that never returns Error 500.
-    Uses MyMemory API as primary engine and GoogleTranslator as fallback.
-    """
     if not text or not text.strip():
         return ""
-    
     lines = [line.strip() for line in text.strip().split("\n") if line.strip()]
     if not lines:
         return ""
-        
     translated_lines = []
     lines_to_translate = lines[:20]
-    
     for line in lines_to_translate:
         if not line:
             continue
         translated_str = None
-        
-        # 1. Try MyMemory API (Free, fast, reliable, no 429/500 errors)
         try:
             url = f"https://api.mymemory.translated.net/get?q={urllib.parse.quote(line)}&langpair={source_lang}|{target_lang}"
             r = requests.get(url, timeout=5)
@@ -167,8 +256,6 @@ def robust_translate_text(text, target_lang, source_lang="en"):
                     translated_str = t_res
         except Exception:
             pass
-            
-        # 2. Fallback to GoogleTranslator
         if not translated_str:
             try:
                 t_res = GoogleTranslator(source=source_lang, target=target_lang).translate(line)
@@ -176,16 +263,10 @@ def robust_translate_text(text, target_lang, source_lang="en"):
                     translated_str = t_res
             except Exception:
                 pass
-
         translated_lines.append(translated_str if translated_str else line)
-        
-    return '\n'.join(translated_lines)
+    return "\n".join(translated_lines)
 
 def fetch_full_song_audio(track_name, artist_name=""):
-    """
-    Extracts FULL song audio stream using yt-dlp.
-    Falls back to iTunes preview if unavailable.
-    """
     query = f"{track_name} {artist_name}".strip()
     ydl_opts = {
         'format': 'bestaudio/best',
@@ -205,7 +286,6 @@ def fetch_full_song_audio(track_name, artist_name=""):
                 }
     except Exception:
         pass
-        
     try:
         url = f"https://itunes.apple.com/search?term={urllib.parse.quote(query)}&entity=song&limit=1"
         headers = {"User-Agent": "Mozilla/5.0"}
@@ -220,7 +300,6 @@ def fetch_full_song_audio(track_name, artist_name=""):
                 }
     except Exception:
         pass
-        
     return None
 
 def search_lyrics_api(track_name, artist_name=""):
@@ -228,7 +307,6 @@ def search_lyrics_api(track_name, artist_name=""):
     if artist_name:
         query_params["artist_name"] = artist_name
     headers = {"User-Agent": "PolyVoiceStreamlit/1.0"}
-    
     get_url = f"https://lrclib.net/api/get?{urllib.parse.urlencode(query_params)}"
     try:
         r = requests.get(get_url, headers=headers, timeout=8)
@@ -318,26 +396,28 @@ def transcribe_audio_file(file_bytes, filename, lang="en-US"):
             os.unlink(temp_path)
 
 # --- Sidebar Navigation ---
-st.sidebar.markdown("## 🎙️ **PolyVoice Studio**")
-st.sidebar.markdown("All-in-One Audio, Translation & Lyrics Hub")
+st.sidebar.markdown("## ✍️ **PolyVoice Studio**")
+st.sidebar.markdown("All-in-One Text, Audio & Document Studio")
 
 navigation = st.sidebar.radio(
     "Select Feature:",
     [
         "1. Speech to Text", 
-        "2. Multi-Translate", 
-        "3. Song Lyrics & Karaoke (Full Audio Players)", 
-        "4. Audio Translation Player (Original vs Translated BGM)",
-        "5. Download & Export"
+        "2. Handwriting & Document OCR (Image/PDF/Word)",
+        "3. Multi-Translate", 
+        "4. AI Text & Document Summarizer",
+        "5. Song Lyrics & Karaoke (Full Audio Players)", 
+        "6. Audio Translation Player (Original vs Translated BGM)",
+        "7. Download & Export"
     ],
-    index=2
+    index=1
 )
 
 st.sidebar.markdown("---")
-st.sidebar.info("💡 **Full Song Audio**: Search any song (e.g. Shape of You) to listen to the FULL track (3-4 mins) AND translated audio!")
+st.sidebar.info("💡 **Handwriting & Document OCR**: Upload handwritten notes, PDFs, or Word docs to extract text, summarize, translate, and listen!")
 
 # --- Main App Header ---
-st.markdown('<div class="main-title">PolyVoice - Multilingual Audio & Lyrics Studio</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">PolyVoice - All-in-One Text & Document Studio</div>', unsafe_allow_html=True)
 
 # ==============================================================================
 # TAB 1: SPEECH TO TEXT
@@ -403,13 +483,61 @@ if navigation == "1. Speech to Text":
             st.markdown(f"**[{seg['start']}s -> {seg['end']}s]**: {seg['text']}")
 
 # ==============================================================================
-# TAB 2: MULTI-LANGUAGE TRANSLATOR
+# TAB 2: HANDWRITING & DOCUMENT OCR (IMAGE/PDF/WORD TO TEXT)
 # ==============================================================================
-elif navigation == "2. Multi-Translate":
-    st.markdown('<div class="sub-title">Translate your speech transcripts or text into 50+ languages simultaneously.</div>', unsafe_allow_html=True)
+elif navigation == "2. Handwriting & Document OCR (Image/PDF/Word)":
+    st.markdown('<div class="sub-title">Upload handwritten notes, scanned images, PDFs, or Word documents to extract clean text.</div>', unsafe_allow_html=True)
+    
+    c_ocr1, c_ocr2 = st.columns([1, 1])
+    
+    with c_ocr1:
+        st.subheader("✍️ Option A: Upload Handwritten Image / Scan")
+        image_file = st.file_uploader(
+            "Upload Handwritten Note or Document Image (JPG, PNG, WEBP)",
+            type=["jpg", "jpeg", "png", "bmp", "webp"]
+        )
+        if image_file is not None:
+            st.image(image_file, caption="Uploaded Image / Handwritten Note", use_container_width=True)
+            if st.button("🔍 Extract Text from Image / Handwriting", type="primary", use_container_width=True):
+                with st.spinner("Running OCR Character Recognition on Handwritten Note..."):
+                    image_bytes = image_file.read()
+                    extracted_text = extract_text_from_image(image_bytes)
+                    st.session_state.transcript_text = extracted_text
+                    st.session_state.transcript_title = f"Handwriting_{os.path.splitext(image_file.name)[0]}"
+                    st.success("Handwritten text extracted successfully!")
+
+    with c_ocr2:
+        st.subheader("📄 Option B: Upload Document File (PDF, DOCX, TXT)")
+        doc_file = st.file_uploader(
+            "Upload Document File (PDF, Word DOCX, TXT)",
+            type=["pdf", "docx", "txt"]
+        )
+        if doc_file is not None:
+            st.info(f"Loaded File: **{doc_file.name}** ({doc_file.size // 1024} KB)")
+            if st.button("📄 Extract Text from Document", type="primary", use_container_width=True):
+                with st.spinner(f"Extracting text from {doc_file.name}..."):
+                    extracted_doc_text = extract_text_from_document(doc_file)
+                    st.session_state.transcript_text = extracted_doc_text
+                    st.session_state.transcript_title = os.path.splitext(doc_file.name)[0]
+                    st.success("Document text extracted successfully!")
+
+    st.markdown("---")
+    st.subheader("📝 Extracted Text Result")
+    ocr_result_area = st.text_area(
+        "Extracted Document / Handwritten Text (Editable):",
+        value=st.session_state.transcript_text,
+        height=220
+    )
+    st.session_state.transcript_text = ocr_result_area
+
+# ==============================================================================
+# TAB 3: MULTI-LANGUAGE TRANSLATOR
+# ==============================================================================
+elif navigation == "3. Multi-Translate":
+    st.markdown('<div class="sub-title">Translate your speech transcripts, handwritten notes, or documents into 50+ languages simultaneously.</div>', unsafe_allow_html=True)
     
     text_to_translate = st.text_area(
-        "Text to Translate (Loaded from Speech-to-Text):",
+        "Text to Translate (Loaded from OCR/Speech):",
         value=st.session_state.transcript_text,
         height=150
     )
@@ -444,9 +572,47 @@ elif navigation == "2. Multi-Translate":
                 st.info(item['text'])
 
 # ==============================================================================
-# TAB 3: SONG LYRICS & KARAOKE (FULL SONG AUDIO PLAYERS)
+# TAB 4: AI TEXT & DOCUMENT SUMMARIZER
 # ==============================================================================
-elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
+elif navigation == "4. AI Text & Document Summarizer":
+    st.markdown('<div class="sub-title">Generate an instant Executive Summary & Key Bullet Point Takeaways for any document, transcript, or handwritten notes.</div>', unsafe_allow_html=True)
+    
+    text_to_summarize = st.text_area(
+        "Text / Document Content to Summarize:",
+        value=st.session_state.transcript_text,
+        height=180
+    )
+    
+    if st.button("⚡ Generate AI Summary & Key Takeaways", type="primary", use_container_width=True):
+        if not text_to_summarize.strip():
+            st.error("Please provide text to summarize.")
+        else:
+            with st.spinner("Analyzing document and generating summary..."):
+                summary_data = generate_ai_summary(text_to_summarize)
+                st.session_state.summary_result = summary_data
+                st.success("Summary generated successfully!")
+                
+    if st.session_state.summary_result:
+        sr_res = st.session_state.summary_result
+        st.markdown("---")
+        
+        stat_c1, stat_c2 = st.columns(2)
+        with stat_c1:
+            st.metric("Total Words", sr_res["word_count"])
+        with stat_c2:
+            st.metric("Total Characters", sr_res["char_count"])
+            
+        st.subheader("📌 Executive Summary")
+        st.info(sr_res["exec_summary"])
+        
+        st.subheader("🔑 Key Takeaways & Bullet Points")
+        for bp in sr_res["bullet_points"]:
+            st.markdown(f"- {bp}")
+
+# ==============================================================================
+# TAB 5: SONG LYRICS & KARAOKE (FULL SONG AUDIO PLAYERS)
+# ==============================================================================
+elif navigation == "5. Song Lyrics & Karaoke (Full Audio Players)":
     st.markdown('<div class="sub-title">Search lyrics for any song (e.g. Shape of You), listen to the FULL original song (3-4 mins), translate lyrics, and play translated audio!</div>', unsafe_allow_html=True)
     
     st.subheader("🔍 Search Song Lyrics & Full Audio")
@@ -492,7 +658,6 @@ elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
                 st.error("No lyrics found in database. You can upload a full MP3 file below!")
 
     st.markdown("---")
-    
     st.subheader("🎧 Full Song Audio Players")
     
     player_col1, player_col2 = st.columns(2)
@@ -570,9 +735,9 @@ elif navigation == "3. Song Lyrics & Karaoke (Full Audio Players)":
                 st.info("Click '▶️ Play Translated Song Audio' above to translate and view lyrics side-by-side!")
 
 # ==============================================================================
-# TAB 4: DUAL AUDIO PLAYER (ORIGINAL VS TRANSLATED VERSION WITH BGM)
+# TAB 6: DUAL AUDIO PLAYER (ORIGINAL VS TRANSLATED VERSION WITH BGM)
 # ==============================================================================
-elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
+elif navigation == "6. Audio Translation Player (Original vs Translated BGM)":
     st.markdown('<div class="sub-title">Listen to your song/speech in both the ORIGINAL version and the TRANSLATED version with background music (BGM/tunes) intact!</div>', unsafe_allow_html=True)
     
     col1, col2 = st.columns([1, 1])
@@ -584,7 +749,7 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
         elif st.session_state.full_song_audio_url:
             st.audio(st.session_state.full_song_audio_url)
         else:
-            st.info("No original audio file uploaded yet. Upload an audio file in Tab 1 or Tab 3 to play along with BGM!")
+            st.info("No original audio file uploaded yet. Upload an audio file in Tab 1 or Tab 5 to play along with BGM!")
             uploaded_dub_file = st.file_uploader("Upload Song/Speech Audio for BGM:", type=["mp3", "wav", "m4a", "ogg"], key="tab4_upload")
             if uploaded_dub_file:
                 st.session_state.song_audio_bytes = uploaded_dub_file.read()
@@ -640,15 +805,15 @@ elif navigation == "4. Audio Translation Player (Original vs Translated BGM)":
                         st.error(f"Failed to generate audio translation: {e}")
 
 # ==============================================================================
-# TAB 5: DOWNLOAD & EXPORT
+# TAB 7: DOWNLOAD & EXPORT
 # ==============================================================================
-elif navigation == "5. Download & Export":
-    st.markdown('<div class="sub-title">Download your transcripts, translations, or lyrics in TXT, SRT, VTT, LRC, or JSON format.</div>', unsafe_allow_html=True)
+elif navigation == "7. Download & Export":
+    st.markdown('<div class="sub-title">Download your transcripts, translations, OCR text, summaries, or lyrics in TXT, SRT, VTT, LRC, or JSON format.</div>', unsafe_allow_html=True)
     
     st.subheader("1. Choose Export Data Source")
     source_choice = st.radio(
         "Select Content Source:",
-        ["Speech Transcript", "Multi-Language Translations", "Song Lyrics"],
+        ["Extracted Text / Transcript", "Multi-Language Translations", "AI Summary", "Song Lyrics"],
         horizontal=True
     )
     
@@ -657,11 +822,17 @@ elif navigation == "5. Download & Export":
     active_text = ""
     active_segs = []
     
-    if source_choice == "Speech Transcript":
+    if source_choice == "Extracted Text / Transcript":
         active_text = st.session_state.transcript_text
         active_segs = st.session_state.transcript_segments
     elif source_choice == "Multi-Language Translations":
         active_text = "\n\n".join([f"=== {v['lang_name']} ({k}) ===\n{v['text']}" for k, v in st.session_state.translations.items()])
+    elif source_choice == "AI Summary":
+        if st.session_state.summary_result:
+            sr_res = st.session_state.summary_result
+            active_text = f"EXECUTIVE SUMMARY:\n{sr_res['exec_summary']}\n\nKEY TAKEAWAYS:\n" + "\n".join([f"- {bp}" for bp in sr_res['bullet_points']])
+        else:
+            active_text = "No summary generated yet."
     elif source_choice == "Song Lyrics":
         active_text = st.session_state.lyrics_data.get("plain", "")
         active_segs = st.session_state.lyrics_data.get("segments", [])
@@ -726,7 +897,8 @@ elif navigation == "5. Download & Export":
         "source": source_choice,
         "text": active_text,
         "segments": active_segs,
-        "translations": st.session_state.translations
+        "translations": st.session_state.translations,
+        "summary": st.session_state.summary_result
     }, indent=2, ensure_ascii=False)
     
     st.download_button(
