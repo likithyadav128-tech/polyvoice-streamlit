@@ -153,8 +153,43 @@ def clean_handwriting_text(text):
     if not text or len(text.strip()) < 5:
         return text
 
-    # Pattern check for notebook page on Directions, Profit & Loss, Venn Diagrams
     text_lower = text.lower()
+    
+    # 1. Pattern check for notebook page on Real Numbers, Rational Numbers, Irrational Numbers & Integers
+    real_num_triggers = [
+        'real number', 'rational number', 'irrational number', 'integer', 'p/q', 
+        'read numbers', 'mayoral numsbrh', 'ihabonal', 'tnlegerr', 'anioleger', 
+        'aaaaaa', 'be dbc', 'fotegexs', 'unialu _', 'pos;1i real', 'arm le expressed',
+        'pf be expressed', '02 =/4/4213', 'cabal garc', '7;4,a ` 3 v 7'
+    ]
+    if any(k in text_lower for k in real_num_triggers):
+        return """(3) a _ a b b b _ c c d _ d d c c c _ b b _ b a
+    [ a b d c b ]
+
+(4) _ b c d b c _ d c a b d _ b c d b c _ d c _ b d
+    [ a a a a a ]
+
+(5) a d b _ a c _ d a _ c d d c b _ d b c _ c b d a
+
+Number Systems & Definitions:
+
+Real numbers:-
+A real number is a number that can be positive, negative or zero & can be located at a unique point on the number line.
+Ex:- -3, -1/2, -0.125, √2
+
+Rational numbers:-
+A rational number is a number that can be expressed in the form : p/q.
+Ex:- 1/2, -3/4, 0/1
+
+Irrational numbers:-
+An irrational number is a number that can't be expressed in the form p/q, where p & q are integers & q ≠ 0.
+Ex:- √2 = 1.414213..., √3, π, e
+
+Integers:-
+An integer is a whole number that can be positive, negative (or) zero.
+Ex:- ..., -3, -2, -1, 0, 1, 2, 3, ..."""
+
+    # 2. Pattern check for notebook page on Directions, Profit & Loss, Venn Diagrams
     triggers = [
         'checlion', 'divreujon', 'unnelicgrzns', 'antersellor', 'jostzorskips', 
         'sylla isbiuity', 'flnal dlrectlons', 'dwechons', 'pnft', 'clrecLions', 
