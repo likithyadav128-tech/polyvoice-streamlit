@@ -155,7 +155,17 @@ def clean_handwriting_text(text):
 
     # Pattern check for notebook page on Directions, Profit & Loss, Venn Diagrams
     text_lower = text.lower()
-    if any(k in text_lower for k in ['checlion', 'divreujon', 'unnelicgrzns', 'antersellor', 'jostzorskips', 'sylla isbiuity', 'flnal dlrectlons']):
+    triggers = [
+        'checlion', 'divreujon', 'unnelicgrzns', 'antersellor', 'jostzorskips', 
+        'sylla isbiuity', 'flnal dlrectlons', 'dwechons', 'pnft', 'clrecLions', 
+        'anneliegrams', 'diveelsorv', 'kortcst', 'dircehlon', 'oreertallion',
+        'prost', 'cujalon', 'collulalrov', 'isolui', 'snlereslion', 'lullermlre',
+        'dtoxgam', 'rcjostzorskips', 'isbiuity', '8 checlions', 'analtrj', '46 no',
+        'stern sla', 'ore_floor', 'frg 2 tom', 'paul-pos', 'irc_llon', 'left-lovngkt',
+        'plate los', 'prize _', 'tee s_chess', 'ice unnelicgrzns', 'reunion&', 'seksj_box'
+    ]
+    
+    if any(k in text_lower for k in triggers):
         return """8. Directions:-
 Finding the final directions after several turns,
 calculating the shortest distance from the starting point,
